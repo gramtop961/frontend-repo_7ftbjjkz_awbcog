@@ -1,28 +1,22 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ArrowDown } from 'lucide-react';
 import Spline from '@splinetool/react-spline';
 
 export default function Hero() {
-  const shapesRef = useRef(null);
+  const containerRef = useRef(null);
   const rafRef = useRef(0);
   const activeRef = useRef(false);
+  const [shouldRenderSpline, setShouldRenderSpline] = useState(false);
 
+  // Motion utilities
   useEffect(() => {
-    const container = shapesRef.current;
+    const container = containerRef.current;
     if (!container) return;
 
     const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (prefersReduced) return;
 
-    const obs = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((e) => {
-          activeRef.current = e.isIntersecting;
-        });
-      },
-      { root: null, threshold: 0.01 }
-    );
-    obs.observe(container);
+    // Only enable mouse parallax on devices with fine pointer and no reduced motion
+    const enableMouse = window.matchMedia('(pointer: fine)').matches && !prefersReduced;
 
     const onMouse = (e) => {
       const rect = container.getBoundingClientRect();
@@ -30,41 +24,84 @@ export default function Hero() {
       const cy = rect.top + rect.height / 2;
       const dx = (e.clientX - cx) / rect.width;
       const dy = (e.clientY - cy) / rect.height;
-      const max = 12; // px
+      const max = 10; // px, conservative for perf
       container.style.setProperty('--mx', `${dx * max}px`);
       container.style.setProperty('--my', `${dy * max}px`);
     };
-    window.addEventListener('mousemove', onMouse, { passive: true });
 
+    if (enableMouse) {
+      window.addEventListener('mousemove', onMouse, { passive: true });
+    }
+
+    // Scroll parallax via rAF when in view only
     const update = () => {
-      if (activeRef.current) {
+      if (activeRef.current && !prefersReduced && document.visibilityState === 'visible') {
         const y = window.scrollY;
         const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
-        const t1 = clamp(-(y * 0.10), -80, 80);
-        const t2 = clamp(-(y * 0.06), -48, 48);
+        const t1 = clamp(-(y * 0.08), -48, 48);
+        const t2 = clamp(-(y * 0.05), -32, 32);
         container.style.setProperty('--p1', `${t1}px`);
         container.style.setProperty('--p2', `${t2}px`);
       }
       rafRef.current = requestAnimationFrame(update);
     };
+
+    const io = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((e) => {
+          activeRef.current = e.isIntersecting;
+          // Defer Spline mounting until hero is actually in view to improve LCP
+          if (e.isIntersecting) {
+            if (prefersReduced) {
+              setShouldRenderSpline(false);
+            } else {
+              // mount after idle or slight delay to avoid blocking input
+              if ('requestIdleCallback' in window) {
+                // @ts-ignore
+                requestIdleCallback(() => setShouldRenderSpline(true), { timeout: 1500 });
+              } else {
+                setTimeout(() => setShouldRenderSpline(true), 600);
+              }
+            }
+          }
+        });
+      },
+      { threshold: 0.1 }
+    );
+
+    io.observe(container);
     rafRef.current = requestAnimationFrame(update);
+
+    const onVisibility = () => {
+      // Pause loop work when tab hidden (handled by check in update)
+    };
+    document.addEventListener('visibilitychange', onVisibility);
 
     return () => {
       cancelAnimationFrame(rafRef.current);
-      window.removeEventListener('mousemove', onMouse);
-      obs.disconnect();
+      io.disconnect();
+      if (enableMouse) window.removeEventListener('mousemove', onMouse);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   }, []);
 
   return (
-    <section id="top" className="relative min-h-[85vh] md:min-h-[90vh] flex items-center overflow-hidden">
+    <section id="top" className="relative min-h-[75vh] md:min-h-[85vh] flex items-center overflow-hidden">
+      {/* Background 3D (lazy-mounted) */}
       <div className="absolute inset-0" aria-hidden>
-        <Spline scene="https://prod.spline.design/xzUirwcZB9SOxUWt/scene.splinecode" style={{ width: '100%', height: '100%' }} />
-        <div className="absolute inset-0 bg-gradient-to-t from-white via-white/50 to-transparent dark:from-neutral-950 dark:via-neutral-950/50 pointer-events-none" />
+        {shouldRenderSpline && (
+          <Spline
+            scene="https://prod.spline.design/igThmltzmqv5hkWo/scene.splinecode"
+            style={{ width: '100%', height: '100%' }}
+          />
+        )}
+        {/* Soft gradient overlay that doesn't block interaction */}
+        <div className="absolute inset-0 bg-gradient-to-t from-white via-white/60 to-transparent dark:from-neutral-950 dark:via-neutral-950/60 pointer-events-none" />
       </div>
 
-      <div ref={shapesRef} className="relative max-w-6xl mx-auto px-4 sm:px-6 w-full">
-        <div className="py-24 md:py-28 lg:py-32">
+      {/* Content */}
+      <div ref={containerRef} className="relative max-w-6xl mx-auto px-4 sm:px-6 w-full">
+        <div className="py-20 md:py-24 lg:py-28">
           <div className="max-w-3xl">
             <h1 className="text-4xl md:text-6xl font-extrabold tracking-tight text-neutral-900 dark:text-neutral-50 leading-tight">
               [Your Name] — Designer & Editor shaping brands with motion and clarity.
@@ -82,13 +119,14 @@ export default function Hero() {
             </div>
           </div>
 
+          {/* Subtle shapes with parallax (GPU-friendly) */}
           <div className="pointer-events-none select-none relative">
             <div
-              className="absolute -z-0 top-8 right-6 w-40 h-40 rounded-full bg-indigo-500/10 blur-3xl will-change-transform"
+              className="absolute z-0 top-8 right-6 w-40 h-40 rounded-full bg-indigo-500/10 blur-3xl will-change-transform"
               style={{ transform: 'translate3d(var(--mx,0), calc(var(--p1, 0)), 0)' }}
             />
             <div
-              className="absolute -z-0 top-24 left-0 w-56 h-56 rounded-full bg-indigo-300/10 blur-3xl will-change-transform"
+              className="absolute z-0 top-24 left-0 w-56 h-56 rounded-full bg-indigo-300/10 blur-3xl will-change-transform"
               style={{ transform: 'translate3d(var(--mx,0), calc(var(--p2, 0)), 0)' }}
             />
           </div>
